@@ -1,0 +1,9 @@
+Revision history for CryptoKit
+
+0.01    2026-10-22
+        - Initial release
+        - Argon2id password hashing (CryptoKit::Hash)
+        - Strong random password generation (CryptoKit::Password)
+        - ECC key generation and signing (CryptoKit::Key)
+        - Hybrid ECC + AES-GCM encryption (CryptoKit::Encrypt)
+        - Secure memory and constant-time comparison (CryptoKit::Secure)
