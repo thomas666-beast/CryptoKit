@@ -1,0 +1,27 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib";
+use CryptoKit;
+use Getopt::Long;
+
+my ($cmd, $arg);
+GetOptions('help|h' => \my $help) or die "bad options\n";
+$cmd = shift @ARGV or die "usage: cryptokit <genpw|hash|keygen|encrypt|decrypt>\n";
+
+my $kit = CryptoKit->new;
+
+if ($cmd eq 'genpw') {
+    print $kit->password->generate($ARGV[0] // 20), "\n";
+}
+elsif ($cmd eq 'hash') {
+    print $kit->hash->create(shift @ARGV), "\n";
+}
+elsif ($cmd eq 'keygen') {
+    my $kp = $kit->key->generate;
+    print $kp->{private_pem}, $kp->{public_pem};
+}
+else {
+    die "unknown command: $cmd\n";
+}

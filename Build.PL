@@ -24,6 +24,7 @@ my $builder = Module::Build->new(
         'Crypt::PRNG'          => '0',
     },
     add_to_cleanup     => [ 'CryptoKit-*' ],
+    script_files => [ 'bin/cryptokit' ],
 );
 
 $builder->create_build_script();
