@@ -47,6 +47,19 @@ Then add the project's `lib/` to your `@INC`, or install with `./Build install`.
 - `Crypt::Argon2` (any version)
 - For tests: `Test2::V0`
 
+## Encryption vs. signing: which key does what
+
+These two operations use the same key pair but in **opposite directions**. Confusing them is one of the most common cryptographic mistakes, so CryptoKit keeps them in separate modules.
+
+| Operation | Encrypt / Sign with | Decrypt / Verify with | What it provides |
+|---|---|---|---|
+| **Encryption** (`CryptoKit::Encrypt`) | **Public** key | **Private** key | Confidentiality — only the key holder can read |
+| **Signing** (`CryptoKit::Key`) | **Private** key | **Public** key | Authenticity — anyone can verify, only the holder can sign |
+
+- To send someone a secret: encrypt with **their public key**. Only they can decrypt it with their private key.
+- To prove a message came from you: sign with **your private key**. Anyone can verify with your public key.
+- "Private key encrypts, public key decrypts" is **not** encryption — it is signing, and it provides no confidentiality, because the public key is public.
+
 ## Usage
 
 ### Quick start
@@ -68,11 +81,11 @@ my $pw = $kit->password->generate(24);
 my $kp = $kit->key->generate;
 # $kp->{private_pem}, $kp->{public_pem}
 
-# Sign and verify
-my $sig = $kit->key->sign($kp->{private_pem}, 'message');
+# Sign with PRIVATE key, verify with PUBLIC key
+my $sig   = $kit->key->sign($kp->{private_pem}, 'message');
 my $valid = $kit->key->verify($kp->{public_pem}, $sig, 'message');
 
-# Encrypt and decrypt
+# Encrypt with PUBLIC key, decrypt with PRIVATE key
 my $blob = $kit->encrypt->encrypt($kp->{public_pem}, 'secret text');
 my $text = $kit->encrypt->decrypt($kp->{private_pem}, $blob);
 
@@ -108,9 +121,11 @@ my $short  = $custom->generate;
 
 Default charset: `A-Z a-z 0-9 ! # $ % ^ & *`. Length defaults to 16. Rejects non-positive lengths and lengths above 4096.
 
-### Key management (`CryptoKit::Key`)
+### Key management and signing (`CryptoKit::Key`)
 
 ECC with `secp256r1` (NIST P-256) and SHA-256 by default.
+
+Signing uses the **private key** to sign and the **public key** to verify. This proves authenticity: anyone can verify, but only the key holder can sign. Signing does **not** provide confidentiality — for that, use `CryptoKit::Encrypt`.
 
 ```perl
 my $k = CryptoKit::Key->new;
@@ -118,18 +133,25 @@ my $k = CryptoKit::Key->new;
 my $kp = $k->generate;                 # { private_pem, public_pem, object }
 my $kp = $k->generate('secp384r1');    # alternative curve
 
+# Sign with the PRIVATE key
 my $sig = $k->sign($kp->{private_pem}, 'message');
-my $ok  = $k->verify($kp->{public_pem}, $sig, 'message');
+
+# Verify with the PUBLIC key
+my $ok = $k->verify($kp->{public_pem}, $sig, 'message');
 ```
 
 The `object` field is a live `Crypt::PK::ECC` instance if you need lower-level access.
 
 ### Hybrid encryption (`CryptoKit::Encrypt`)
 
-ECC alone cannot encrypt arbitrary-length data — it's limited to a few dozen bytes and is really a key-agreement primitive. `CryptoKit::Encrypt` implements the standard hybrid pattern:
+Encryption uses the **recipient's public key** to encrypt, and the **recipient's private key** to decrypt. This is the opposite direction from signing: only the holder of the private key can read the message.
+
+Do not confuse this with `sign`/`verify`, where the private key signs and the public key verifies. Signing proves authenticity but provides no confidentiality — anyone with the public key can verify a signature.
+
+`CryptoKit::Encrypt` implements the standard hybrid pattern, because ECC alone cannot encrypt arbitrary-length data (it is a key-agreement primitive, limited to a few dozen bytes):
 
 1. Generate an ephemeral ECC key pair per message (forward secrecy)
-2. ECDH with the recipient's public key
+2. ECDH: ephemeral private key + recipient public key → shared secret
 3. HKDF-SHA256 derives a 32-byte AES key
 4. AES-256-GCM encrypts and authenticates the payload
 5. Serialize as `[4-byte BE DER length][DER][12-byte IV][16-byte tag][ciphertext]`
@@ -137,7 +159,10 @@ ECC alone cannot encrypt arbitrary-length data — it's limited to a few dozen b
 ```perl
 my $e = CryptoKit::Encrypt->new;
 
+# Encrypt with the PUBLIC key (anyone can do this)
 my $blob = $e->encrypt($kp->{public_pem}, 'secret message');
+
+# Decrypt with the PRIVATE key (only the key holder can do this)
 my $text = $e->decrypt($kp->{private_pem}, $blob);
 ```
 
@@ -177,6 +202,7 @@ carton exec -- ./bin/cryptokit keygen
 ## Security Notes
 
 - **Keep CryptX updated.** Version 0.088 fixed a critical `fork()` PRNG reseeding bug that could cause different worker processes to generate identical keys. Version 0.088_001 fixed a timing side-channel in AEAD tag verification.
+- **Keep encrypt and sign directions straight.** Encrypt with the public key, decrypt with the private key. Sign with the private key, verify with the public key. Mixing them up either breaks confidentiality or breaks authenticity.
 - **Only store hashed passwords.** `CryptoKit::Hash->create` returns the encoded string; store that, never the plaintext.
 - **Authenticated encryption only.** `CryptoKit::Encrypt` always uses AES-GCM. Do not add unauthenticated modes (AES-CBC, CTR without a MAC) — they are trivially malleable.
 - **Constant-time comparison.** Use `CryptoKit::Secure->compare` for tokens and HMACs, not `eq` or `==`.
