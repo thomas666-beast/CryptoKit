@@ -1,9 +1,24 @@
 Revision history for CryptoKit
 
+0.03    2026-10-23
+        - Add CryptoKit::HolopeinenID for self-verifying, time-ordered,
+          shard-safe identifiers
+        - Add CryptoKit::FileVault for split-and-pack file encryption
+        - Add CryptoKit::HMAC for HMAC signing
+        - Add CryptoKit::TOTP for time-based one-time passwords
+        - Add CryptoKit::FileEncrypt for streaming AES-GCM file encryption
+        - Expand CLI with hmac, totp, encrypt-file, decrypt-file,
+          vault-pack, vault-unpack, hid-issue, hid-verify
+        - Fix FileVault CORE::pack/unpack ambiguity warnings
+        - Fix HolopeinenID separator (. instead of _) to avoid
+          base64url collision
+        - 14 test files, 80+ subtests
+
+0.02    2026-10-22
+        - Add XS-accelerated HiatalaMrk is not part of this distribution.
+          This version exists to mark the state before the large module
+          additions above.
+
 0.01    2026-10-22
-        - Initial release
-        - Argon2id password hashing (CryptoKit::Hash)
-        - Strong random password generation (CryptoKit::Password)
-        - ECC key generation and signing (CryptoKit::Key)
-        - Hybrid ECC + AES-GCM encryption (CryptoKit::Encrypt)
-        - Secure memory and constant-time comparison (CryptoKit::Secure)
+        - Initial release with Hash, Password, Key, Encrypt, Secure
+        - Basic CLI with genpw, hash, keygen

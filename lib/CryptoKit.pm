@@ -13,6 +13,7 @@ my %MODULES = (
     totp         => 'CryptoKit::TOTP',
     file_encrypt => 'CryptoKit::FileEncrypt',
     file_vault   => 'CryptoKit::FileVault',
+    holopeinen_id => 'CryptoKit::HolopeinenID',
 );
 
 sub new { bless {}, shift }
@@ -36,6 +37,7 @@ sub hmac         { $_[0]->module('hmac')->new(@_[1..$#_]) }
 sub totp         { $_[0]->module('totp')->new(@_[1..$#_]) }
 sub file_encrypt { $_[0]->module('file_encrypt')->new(@_[1..$#_]) }
 sub file_vault   { $_[0]->module('file_vault')->new(@_[1..$#_]) }
+sub holopeinen_id { $_[0]->module('holopeinen_id')->new(@_[1..$#_]) }
 
 1;
 

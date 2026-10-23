@@ -1,6 +1,6 @@
 # CryptoKit
 
-A modular cryptographic toolkit for Perl. Provides password hashing, secure random password generation, ECC key management, hybrid encryption, HMAC signing, TOTP, file encryption, split file vaults, and secure memory handling — each as an independent, lazily loaded submodule.
+A modular cryptographic toolkit for Perl. Provides password hashing, secure random password generation, ECC key management, hybrid encryption, HMAC signing, TOTP, file encryption, split file vaults, self-verifying identifiers, and secure memory handling — each as an independent, lazily loaded submodule.
 
 Built on [CryptX](https://metacpan.org/pod/CryptX) and [Crypt::Argon2](https://metacpan.org/pod/Crypt::Argon2), with security-critical version pins.
 
@@ -16,6 +16,7 @@ Built on [CryptX](https://metacpan.org/pod/CryptX) and [Crypt::Argon2](https://m
 | `CryptoKit::TOTP` | Time-based one-time passwords (Google Authenticator compatible) |
 | `CryptoKit::FileEncrypt` | Streaming AES-256-GCM file encryption |
 | `CryptoKit::FileVault` | Split a file into encrypted chunks, pack, and reassemble |
+| `CryptoKit::HolopeinenID` | Self-verifying, time-ordered, shard-safe identifiers |
 | `CryptoKit::Secure` | Secure memory buffers and constant-time comparison |
 
 ## Installation
@@ -26,10 +27,8 @@ Built on [CryptX](https://metacpan.org/pod/CryptX) and [Crypt::Argon2](https://m
 git clone <your-repo-url> CryptoKit
 cd CryptoKit
 
-# Install dependencies into local/ via Carton
 carton install
 
-# Build and test
 carton exec -- perl Build.PL
 carton exec -- ./Build
 carton exec -- ./Build test
@@ -46,7 +45,7 @@ Then add the project's `lib/` to your `@INC`, or install with `./Build install`.
 ## Requirements
 
 - Perl 5.16 or later
-- **CryptX >= 0.088** — earlier versions do not reseed the PRNG after `fork()`, which can cause child processes to generate identical keys
+- **CryptX >= 0.088_001** — earlier versions have a timing side-channel in AEAD tag verification (`decrypt_done`), which is used by `CryptoKit::FileEncrypt` and `CryptoKit::FileVault` [citation:2]
 - **Crypt::SecretBuffer >= 0.019** — earlier versions have a timing side-channel in `memcmp`
 - `Crypt::Argon2` (any version)
 - `Authen::OATH` (for TOTP)
@@ -77,8 +76,7 @@ my $kit = CryptoKit->new;
 
 # Password hashing
 my $encoded = $kit->hash->create('my secret password');
-my $ok      = $kit->hash->verify($encoded, 'my secret password');   # true
-my $bad     = $kit->hash->verify($encoded, 'wrong');                # false
+my $ok      = $kit->hash->verify($encoded, 'my secret password');
 
 # Strong random password
 my $pw = $kit->password->generate(24);
@@ -101,6 +99,11 @@ my $hmac_ok = $kit->hmac->verify($secret_key, 'payload', $token);
 # TOTP for two-factor auth
 my $code    = $kit->totp->generate($totp_secret);
 my $totp_ok = $kit->totp->verify($totp_secret, $user_code);
+
+# HolopeinenID for self-verifying identifiers
+my $hid = $kit->holopeinen_id(key => $secret, shard => 'A3');
+my $id  = $hid->issue(prefix => 'usr', payload => 'user_42');
+my $r   = $hid->verify($id);
 
 # Constant-time comparison
 my $eq = $kit->secure->compare($user_token, $stored_token);
@@ -127,7 +130,6 @@ Uses `Crypt::PRNG` (ChaCha20, part of CryptX) — not Perl's built-in `rand`.
 my $p = CryptoKit::Password->new;
 my $pw = $p->generate(20);
 
-# Custom charset and length
 my $custom = CryptoKit::Password->new(charset => 'ab', length => 8);
 my $short  = $custom->generate;
 ```
@@ -143,14 +145,10 @@ Signing uses the **private key** to sign and the **public key** to verify. This 
 ```perl
 my $k = CryptoKit::Key->new;
 
-my $kp = $k->generate;                 # { private_pem, public_pem, object }
-my $kp = $k->generate('secp384r1');    # alternative curve
+my $kp = $k->generate;
 
-# Sign with the PRIVATE key
 my $sig = $k->sign($kp->{private_pem}, 'message');
-
-# Verify with the PUBLIC key
-my $ok = $k->verify($kp->{public_pem}, $sig, 'message');
+my $ok  = $k->verify($kp->{public_pem}, $sig, 'message');
 ```
 
 The `object` field is a live `Crypt::PK::ECC` instance if you need lower-level access.
@@ -170,10 +168,7 @@ Encryption uses the **recipient's public key** to encrypt, and the **recipient's
 ```perl
 my $e = CryptoKit::Encrypt->new;
 
-# Encrypt with the PUBLIC key (anyone can do this)
 my $blob = $e->encrypt($kp->{public_pem}, 'secret message');
-
-# Decrypt with the PRIVATE key (only the key holder can do this)
 my $text = $e->decrypt($kp->{private_pem}, $blob);
 ```
 
@@ -191,8 +186,8 @@ if ($h->verify($shared_secret, $payload, $token)) {
     # authentic
 }
 
-my $raw = $h->raw($shared_secret, $payload);       # binary
-my $b64 = $h->b64url($shared_secret, $payload);    # URL-safe base64
+my $raw = $h->raw($shared_secret, $payload);
+my $b64 = $h->b64url($shared_secret, $payload);
 ```
 
 Default hash is SHA256. `verify` uses constant-time comparison.
@@ -242,8 +237,6 @@ Output format: `[12-byte IV][ciphertext][16-byte tag]`. The IV is random per enc
 
 `decrypt_file` dies if the authentication tag does not match.
 
-**Memory note:** `decrypt_file` currently reads the whole ciphertext into memory to locate the trailing 16-byte tag. For files larger than a few hundred MB, memory usage grows with file size.
-
 ### File vault (`CryptoKit::FileVault`)
 
 Splits a file into fixed-size chunks, encrypts each chunk independently with AES-256-GCM, and packs them with an encrypted manifest.
@@ -251,20 +244,51 @@ Splits a file into fixed-size chunks, encrypts each chunk independently with AES
 ```perl
 my $v = CryptoKit::FileVault->new;
 
-# Container mode: one file
 my $info = $v->pack($key32, 'plain.txt', 'secret.ckfv');
 $v->unpack($key32, 'secret.ckfv', 'plain.out');
 
-# Split mode: one manifest + one file per chunk
 my $info = $v->split($key32, 'plain.txt', 'vault-dir/');
 $v->join($key32, 'vault-dir/plain.txt.ckfv-manifest', 'plain.out');
 ```
 
-Each chunk has its own IV and tag, so a corrupted or missing chunk is identified precisely. The manifest records the number of chunks, chunk size, original filename, original size, and SHA-256 of the whole plaintext. The manifest itself is encrypted with the same key, so metadata is confidential.
+Each chunk has its own IV and tag, so a corrupted or missing chunk is identified precisely. The manifest records the number of chunks, chunk size, original filename, original size, and SHA-256 of the whole plaintext. The manifest itself is encrypted with the same key.
 
 Split mode is useful for distributing files across storage, or for parallelizing decryption — each chunk can be decrypted independently.
 
-**Memory note:** `pack` and `split` currently load the whole input into memory to compute the plaintext SHA-256. For files larger than available RAM, use `CryptoKit::FileEncrypt` (streaming, no manifest) instead.
+### HolopeinenID (`CryptoKit::HolopeinenID`)
+
+A HolopeinenID is a compact identifier that is **time-ordered**, **shard-safe**, **self-verifying**, and **scoped**. It looks like:
+
+```
+usr.00XkP9A3f7G2mN4qR8tYu.9tZ3x8LqR2fWn1A
+[prefix].[timestamp+shard+random].[MAC]
+```
+
+```perl
+my $hid = CryptoKit::HolopeinenID->new(key => $secret, shard => 'A3');
+
+my $id = $hid->issue(prefix => 'usr', payload => 'user_42');
+
+my $r = $hid->verify($id);
+if ($r->{ok}) {
+    printf "user=%s issued=%d shard=%s\n",
+        $r->{payload}, $r->{timestamp}, $r->{shard};
+} else {
+    warn "Rejected: $r->{reason}\n";
+}
+```
+
+**Properties:**
+
+- **Time-ordered** — IDs from the same shard sort in creation order
+- **Shard-safe** — different nodes use different `shard` codes; no collisions even with clock skew
+- **Self-verifying** — tampering is detected without a database lookup
+- **Scoped** — the prefix is bound into the MAC, so a `usr` ID cannot be used as an `inv` ID
+- **Compact** — about 42 characters for an ID with no payload
+
+The separator is `.` (dot), which is **not** in the base64url alphabet, so payload and MAC segments cannot be confused with the separator.
+
+**Important:** the key is a shared secret. The payload is not encrypted — if you need to hide it, encrypt it first with `CryptoKit::Encrypt`.
 
 ### Secure memory (`CryptoKit::Secure`)
 
@@ -300,6 +324,8 @@ carton exec -- ./bin/cryptokit keygen
 | `decrypt-file <key-hex> <in> <out>` | Decrypted file (dies on tag mismatch) |
 | `vault-pack <key-hex> <in> <out>` | Split + encrypt + pack a file into one container |
 | `vault-unpack <key-hex> <in> <out>` | Reassemble a packed container |
+| `hid-issue <key-hex> <prefix> [payload] [shard]` | Issue a HolopeinenID |
+| `hid-verify <key-hex> <id>` | Verify a HolopeinenID |
 
 Generate a file encryption key as 64 hex characters:
 
@@ -319,7 +345,7 @@ diff plain.txt plain.out && echo "round-trip OK"
 
 ## Security Notes
 
-- **Keep CryptX updated.** Version 0.088 fixed a critical `fork()` PRNG reseeding bug. Version 0.088_001 fixed a timing side-channel in AEAD tag verification.
+- **Keep CryptX updated.** Version 0.088_001 fixed a timing side-channel in AEAD tag verification (`decrypt_done`), which is used by `FileEncrypt` and `FileVault` [citation:2].
 - **Keep encrypt and sign directions straight.** Encrypt with the public key, decrypt with the private key. Sign with the private key, verify with the public key.
 - **Only store hashed passwords.** `CryptoKit::Hash->create` returns the encoded string; store that, never the plaintext.
 - **Authenticated encryption only.** `CryptoKit::Encrypt`, `CryptoKit::FileEncrypt`, and `CryptoKit::FileVault` always use AES-GCM. Do not add unauthenticated modes.
@@ -328,6 +354,7 @@ diff plain.txt plain.out && echo "round-trip OK"
 - **HMAC keys are shared secrets.** Anyone with the key can forge tokens. Distribute over a secure channel and rotate periodically.
 - **File encryption keys are raw 32-byte values.** Store them separately from the encrypted files, and never in the same directory.
 - **Private keys are sensitive.** `CryptoKit::Key` returns PEM strings in plain scalars. Pass them through `CryptoKit::Secure->wrap` before further use, and protect key files with mode `0600`.
+- **HolopeinenID keys are shared secrets.** Anyone with the key can issue valid IDs. The payload is not encrypted; encrypt it first with `CryptoKit::Encrypt` if confidentiality is needed.
 
 ## Project layout
 
@@ -351,6 +378,7 @@ CryptoKit/
 │       ├── TOTP.pm
 │       ├── FileEncrypt.pm
 │       ├── FileVault.pm
+│       ├── HolopeinenID.pm
 │       └── Secure.pm
 └── t/
     ├── 00-load.t
@@ -362,6 +390,7 @@ CryptoKit/
     ├── totp.t
     ├── fileencrypt.t
     ├── filevault.t
+    ├── holopeinenid.t
     └── secure.t
 ```
 
@@ -385,23 +414,6 @@ sub yourfeature { $_[0]->module('yourfeature')->new(@_[1..$#_]) }
 4. Write `t/yourfeature.t` and run `carton exec -- ./Build test`.
 
 The main module never needs to know your implementation details; each submodule is independently testable and replaceable.
-
-### Planned additions
-
-- `SecretBuffer` integration inside `Hash` and `Key` so passwords and private keys never linger in plain scalars
-- Streaming `pack` and `split` in `FileVault` to avoid loading the whole file into memory
-
-## Testing
-
-```bash
-carton exec -- ./Build test
-```
-
-Author tests (POD coverage, manifest, syntax of POD) are gated behind `AUTHOR_TESTING`:
-
-```bash
-AUTHOR_TESTING=1 carton exec -- ./Build test
-```
 
 ## License
 

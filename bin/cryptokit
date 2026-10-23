@@ -24,6 +24,8 @@ elsif ($cmd eq 'encrypt-file')  { cmd_encrypt_file(@ARGV) }
 elsif ($cmd eq 'decrypt-file')  { cmd_decrypt_file(@ARGV) }
 elsif ($cmd eq 'vault-pack')    { cmd_vault_pack(@ARGV) }
 elsif ($cmd eq 'vault-unpack')  { cmd_vault_unpack(@ARGV) }
+elsif ($cmd eq 'hid-issue')     { cmd_hid_issue(@ARGV) }
+elsif ($cmd eq 'hid-verify')    { cmd_hid_verify(@ARGV) }
 else                            { die "Unknown command: $cmd\n"; usage(1) }
 
 exit 0;
@@ -49,6 +51,9 @@ Commands:
                                   and pack them into one container
   vault-unpack <key-hex> <in> <out>
                                   Reassemble a packed container
+  hid-issue <key-hex> <prefix> [payload] [shard]
+                                  Issue a HolopeinenID
+  hid-verify <key-hex> <id>       Verify a HolopeinenID
 
 Options:
   -h, --help                      Show this help
@@ -58,6 +63,7 @@ Examples:
   cryptokit hash 'hunter2'
   cryptokit hmac 'shared-key' 'payload'
   cryptokit totp 'JBSWY3DPEHPK3PXP'
+  cryptokit hid-issue $(perl -MCrypt::PRNG=random_bytes -e 'print unpack("H*", random_bytes(32))') usr 'user_42' A3
   cryptokit vault-pack $(perl -MCrypt::PRNG=random_bytes -e 'print unpack("H*", random_bytes(32))') plain.txt secret.ckfv
 USAGE
     exit $exit;
@@ -133,6 +139,37 @@ sub cmd_vault_unpack {
     my $info = $kit->file_vault->unpack($key, $in, $out);
     printf "Unpacked %d chunk(s), %d bytes -> %s\n",
         $info->{n_chunks}, $info->{orig_size}, $out;
+}
+
+sub cmd_hid_issue {
+    my ($key_hex, $prefix, $payload, $shard) = @_;
+    die "Usage: cryptokit hid-issue <key-hex> <prefix> [payload] [shard]\n"
+        unless defined $key_hex && defined $prefix;
+    $shard //= '00';
+    my $key = _hex_key($key_hex);
+    my $hid = $kit->holopeinen_id(key => $key, shard => $shard);
+    my %opt = (prefix => $prefix);
+    $opt{payload} = $payload if defined $payload && length $payload;
+    print $hid->issue(%opt), "\n";
+}
+
+sub cmd_hid_verify {
+    my ($key_hex, $id) = @_;
+    die "Usage: cryptokit hid-verify <key-hex> <id>\n"
+        unless defined $key_hex && defined $id;
+    my $key = _hex_key($key_hex);
+    my $hid = $kit->holopeinen_id(key => $key, shard => '00');
+    my $r = $hid->verify($id);
+    if ($r->{ok}) {
+        print "OK\n";
+        print "prefix:    $r->{prefix}\n";
+        print "timestamp: $r->{timestamp}\n";
+        print "shard:     $r->{shard}\n";
+        print "payload:   $r->{payload}\n" if length $r->{payload};
+    } else {
+        print "REJECTED: $r->{reason}\n";
+        exit 1;
+    }
 }
 
 sub _hex_key {
