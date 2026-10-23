@@ -7,3 +7,8 @@ Makefile
 Makefile.old
 local/
 .venv/
+*.tar.gz
+META.json
+META.yml
+MANIFEST
+pm_to_blib

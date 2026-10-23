@@ -1,0 +1,50 @@
+# Version control
+^\.git/
+^\.gitignore$
+^\.github/
+
+# Build artifacts
+^blib/
+^_build/
+^Build$
+^Makefile$
+^Makefile\.old$
+^HiatalaMrk\.c$
+^HiatalaMrk\.xsc$
+^HiatalaMrk\.bs$
+^.*\.o$
+^.*\.so$
+^.*\.dll$
+^.*\.dylib$
+^.*\.bundle$
+
+# Distribution artifacts
+^HiatalaMrk-.*\.tar\.gz$
+^.*\.tar\.gz$
+^.*\.zip$
+
+# Carton
+^local/
+^cpanfile\.snapshot\.lock$
+
+# Editor and OS
+^.*\.swp$
+^.*\.swo$
+^.*~$
+^\.DS_Store$
+^\.idea/
+^\.vscode/
+^.*\.bak$
+
+# Test output
+^.*\.out$
+^cover_db/
+^nytprof\.out$
+^nytprof/
+
+# Meta
+^MYMETA\..*$
+^META\..*$
+^\.perlcritic$
+
+pm_to_blib
