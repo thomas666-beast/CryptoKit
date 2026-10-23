@@ -3,22 +3,43 @@ Revision history for CryptoKit
 0.03    2026-10-23
         - Add CryptoKit::HolopeinenID for self-verifying, time-ordered,
           shard-safe identifiers
-        - Add CryptoKit::FileVault for split-and-pack file encryption
-        - Add CryptoKit::HMAC for HMAC signing
+        - Add CryptoKit::FileVault for split-and-pack file encryption,
+          with both container mode (pack/unpack) and distributed mode
+          (split/join)
+        - Add CryptoKit::HMAC for HMAC signing with constant-time
+          verification
         - Add CryptoKit::TOTP for time-based one-time passwords
         - Add CryptoKit::FileEncrypt for streaming AES-GCM file encryption
-        - Expand CLI with hmac, totp, encrypt-file, decrypt-file,
+        - CryptoKit::Hash: optional HiatalaMrk backend via
+          backend => 'hiatala'; verify dispatches on the encoded prefix
+          ($argon2id$ vs $hiatalamrk$) so both backends can coexist in the
+          same storage column
+        - CryptoKit::Password: rewrite to rejection sampling for uniform
+          distribution (no modulo bias); roughly 2x faster
+        - CryptoKit::FileEncrypt: decrypt seeks to the trailing tag and
+          streams from the start, so memory is constant regardless of file
+          size (50 MB file previously needed ~120 MB RSS, now ~2 MB)
+        - CryptoKit::FileVault: streams chunks one at a time; empty files
+          are encoded as a single empty chunk so the manifest's n_chunks
+          always matches the records on disk
+        - Fix FileVault CORE::pack/CORE::unpack ambiguity warnings
+        - Fix HolopeinenID separator (. instead of _) to avoid collision
+          with base64url alphabet
+        - Expand CLI with verify, hmac, totp, encrypt-file, decrypt-file,
           vault-pack, vault-unpack, hid-issue, hid-verify
-        - Fix FileVault CORE::pack/unpack ambiguity warnings
-        - Fix HolopeinenID separator (. instead of _) to avoid
-          base64url collision
-        - 14 test files, 80+ subtests
+        - Add t/perf.t (gated by AUTHOR_TESTING) for baseline benchmarking
+        - 15 test files, 95+ subtests
 
 0.02    2026-10-22
-        - Add XS-accelerated HiatalaMrk is not part of this distribution.
-          This version exists to mark the state before the large module
-          additions above.
+        - Add CryptoKit::Encrypt hybrid ECC + AES-GCM
+        - Add CryptoKit::Secure wrapper around Crypt::SecretBuffer
+        - Add constant-time comparison helpers
+        - Add CLI with genpw, hash, keygen
+        - Basic tests for hash, password, key, encrypt, secure
 
 0.01    2026-10-22
-        - Initial release with Hash, Password, Key, Encrypt, Secure
-        - Basic CLI with genpw, hash, keygen
+        - Initial release with CryptoKit::Hash, CryptoKit::Password,
+          CryptoKit::Key
+        - Argon2id password hashing
+        - Strong random password generation
+        - ECC key generation and ECDSA sign/verify
