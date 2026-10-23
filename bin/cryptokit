@@ -78,9 +78,12 @@ sub cmd_genpw {
 }
 
 sub cmd_hash {
-    my ($pw) = @_;
-    die "Usage: cryptokit hash <password>\n" unless defined $pw;
-    print $kit->hash->create($pw), "\n";
+    my ($pw, $backend) = @_;
+    die "Usage: cryptokit hash <password> [argon2|hiatala]\n"
+        unless defined $pw;
+    my %opt;
+    $opt{backend} = $backend if defined $backend;
+    print $kit->hash->create($pw, %opt), "\n";
 }
 
 sub cmd_keygen {

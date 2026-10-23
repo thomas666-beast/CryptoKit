@@ -41,21 +41,24 @@ sub decrypt_file {
 
     read($in, my $iv, 12) == 12 or die "Truncated IV";
 
-    # Read whole file, last 16 bytes are the tag
-    my $all = do { local $/; <$in> };
-    die "Truncated ciphertext" if length($all) < 16;
-    my $tag        = substr($all, -16);
-    my $ciphertext = substr($all, 0, length($all) - 16);
+    # Seek to the last 16 bytes to read the tag
+    seek($in, -16, 2) or die "Cannot seek to tag: $!";
+    read($in, my $tag, 16) == 16 or die "Truncated tag";
+
+    # Seek back to just after the IV
+    seek($in, 12, 0) or die "Cannot seek back: $!";
 
     my $ae = Crypt::AuthEnc::GCM->new('AES', $key, $iv);
-    my $plaintext = '';
-    for (my $off = 0; $off < length($ciphertext); $off += $CHUNK) {
-        my $chunk = substr($ciphertext, $off, $CHUNK);
-        $plaintext .= $ae->decrypt_add($chunk);
+    my $remaining = (-s $in_path) - 12 - 16;
+
+    while ($remaining > 0) {
+        my $want = $remaining < $CHUNK ? $remaining : $CHUNK;
+        read($in, my $buf, $want) == $want or die "Short read";
+        $remaining -= $want;
+        print $out $ae->decrypt_add($buf);
     }
     $ae->decrypt_done($tag) or die "Authentication failed";
 
-    print $out $plaintext;
     close $in;
     close $out;
     return 1;

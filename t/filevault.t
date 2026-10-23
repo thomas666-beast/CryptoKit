@@ -6,7 +6,6 @@ use File::Temp qw(tempdir);
 use Digest::SHA qw(sha256);
 
 my $key = random_bytes(32);
-my $dir = tempdir(CLEANUP => 1);
 
 sub write_file {
     my ($path, $data) = @_;
@@ -21,11 +20,11 @@ sub read_file {
     return do { local $/; <$fh> };
 }
 
-# Use a small chunk size so multi-chunk behavior is exercised
-my $v = CryptoKit->new->file_vault(chunk_size => 256);
-
 # --- Container mode: small file (single chunk) ---
 {
+    my $dir = tempdir(CLEANUP => 1);
+    my $v   = CryptoKit->new->file_vault(chunk_size => 256);
+
     my $plain = "hello world\n";
     my $in    = "$dir/small.txt";
     my $enc   = "$dir/small.ckfv";
@@ -42,6 +41,9 @@ my $v = CryptoKit->new->file_vault(chunk_size => 256);
 
 # --- Container mode: multi-chunk ---
 {
+    my $dir = tempdir(CLEANUP => 1);
+    my $v   = CryptoKit->new->file_vault(chunk_size => 256);
+
     my $plain = join '', map { chr(65 + $_ % 26) } 1 .. 1000;
     my $in    = "$dir/multi.txt";
     my $enc   = "$dir/multi.ckfv";
@@ -57,6 +59,9 @@ my $v = CryptoKit->new->file_vault(chunk_size => 256);
 
 # --- Container mode: empty file ---
 {
+    my $dir = tempdir(CLEANUP => 1);
+    my $v   = CryptoKit->new->file_vault(chunk_size => 256);
+
     my $in  = "$dir/empty.txt";
     my $enc = "$dir/empty.ckfv";
     my $out = "$dir/empty.out";
@@ -67,8 +72,11 @@ my $v = CryptoKit->new->file_vault(chunk_size => 256);
     is read_file($out), '', 'empty file round-trips';
 }
 
-# --- Wrong key ---
+# --- Container mode: wrong key rejected ---
 {
+    my $dir = tempdir(CLEANUP => 1);
+    my $v   = CryptoKit->new->file_vault(chunk_size => 256);
+
     my $in  = "$dir/wrongkey.txt";
     my $enc = "$dir/wrongkey.ckfv";
     write_file($in, 'secret');
@@ -79,8 +87,11 @@ my $v = CryptoKit->new->file_vault(chunk_size => 256);
         'wrong key rejected';
 }
 
-# --- Tampered container ---
+# --- Container mode: tampered container rejected ---
 {
+    my $dir = tempdir(CLEANUP => 1);
+    my $v   = CryptoKit->new->file_vault(chunk_size => 256);
+
     my $in  = "$dir/tamper.txt";
     my $enc = "$dir/tamper.ckfv";
     write_file($in, 'x' x 500);
@@ -99,9 +110,12 @@ my $v = CryptoKit->new->file_vault(chunk_size => 256);
 
 # --- Split mode: round-trip with multiple chunks ---
 {
+    my $dir = tempdir(CLEANUP => 1);
+    my $v   = CryptoKit->new->file_vault(chunk_size => 256);
+
     my $plain = join '', map { chr(65 + $_ % 26) } 1 .. 1000;
     my $in    = "$dir/split.txt";
-    my $vdir  = "$dir/vault";
+    my $vdir  = "$dir/vault-split";
     my $out   = "$dir/split.out";
     write_file($in, $plain);
 
@@ -113,8 +127,11 @@ my $v = CryptoKit->new->file_vault(chunk_size => 256);
     is read_file($out), $plain, 'split/join round-trips';
 }
 
-# --- Split mode: missing chunk ---
+# --- Split mode: missing chunk causes failure ---
 {
+    my $dir = tempdir(CLEANUP => 1);
+    my $v   = CryptoKit->new->file_vault(chunk_size => 256);
+
     my $plain = join '', map { chr(65 + $_ % 26) } 1 .. 1000;
     my $in    = "$dir/missing.txt";
     my $vdir  = "$dir/vault-missing";
@@ -129,6 +146,9 @@ my $v = CryptoKit->new->file_vault(chunk_size => 256);
 
 # --- SHA-256 integrity check in manifest ---
 {
+    my $dir = tempdir(CLEANUP => 1);
+    my $v   = CryptoKit->new->file_vault(chunk_size => 256);
+
     my $plain = 'integrity test';
     my $in    = "$dir/int.txt";
     my $enc   = "$dir/int.ckfv";

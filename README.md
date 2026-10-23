@@ -111,16 +111,30 @@ my $eq = $kit->secure->compare($user_token, $stored_token);
 
 ### Password hashing (`CryptoKit::Hash`)
 
-Uses Argon2id with parameters: 3 iterations, 32 MiB memory, 1 lane, 32-byte tag, random 16-byte salt. The output is a standard Argon2id-encoded string suitable for database storage.
+Two backends are available:
+
+- **Argon2id** (default) — the production recommendation
+- **HiatalaMrk** (optional) — a research prototype included in this project's ecosystem
 
 ```perl
 my $h = CryptoKit::Hash->new;
 
-my $encoded = $h->create($password);       # store this
+# Argon2id (default)
+my $encoded = $h->create($password);
 my $ok      = $h->verify($encoded, $password);
+
+# HiatalaMrk (requires HiatalaMrk to be installed)
+if ($h->hiatala_available) {
+    my $enc = $h->create($password, backend => 'hiatala');
+    my $ok  = $h->verify($enc, $password);
+}
 ```
 
 **Do not** store the raw password. Only store the encoded string. The salt is embedded in it.
+
+The encoded string is self-describing: verify reads the prefix ($argon2id$ or $hiatalamrk$) and dispatches to the right backend automatically. You can store hashes from both backends in the same column, and verification will still work.
+
+**Do not** use HiatalaMrk for production passwords. See the HiatalaMrk README for its status. Use Argon2id.
 
 ### Password generation (`CryptoKit::Password`)
 
@@ -305,7 +319,15 @@ Never use Perl's `eq` to compare security-sensitive strings — it short-circuit
 
 ## Command-line interface
 
-Install with `./Build install`, or run from the source tree:
+
+### Install HiatalaMrk locally (once)
+
+```bash
+cd ~/Coding/Perl/Carton/HiatalaMrk
+perl Makefile.PL
+make
+make test
+make install
 
 ```bash
 carton exec -- ./bin/cryptokit genpw 24
