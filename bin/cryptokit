@@ -3,25 +3,141 @@ use strict;
 use warnings;
 use FindBin qw($RealBin);
 use lib "$RealBin/../lib";
-use CryptoKit;
-use Getopt::Long;
 
-my ($cmd, $arg);
-GetOptions('help|h' => \my $help) or die "bad options\n";
-$cmd = shift @ARGV or die "usage: cryptokit <genpw|hash|keygen|encrypt|decrypt>\n";
+use CryptoKit;
+use Getopt::Long qw(GetOptions);
 
 my $kit = CryptoKit->new;
 
-if ($cmd eq 'genpw') {
-    print $kit->password->generate($ARGV[0] // 20), "\n";
+my $help = 0;
+GetOptions('help|h' => \$help) or usage(1);
+usage(0) if $help;
+
+my $cmd = shift @ARGV or usage(1);
+
+if    ($cmd eq 'genpw')         { cmd_genpw(@ARGV) }
+elsif ($cmd eq 'hash')          { cmd_hash(@ARGV) }
+elsif ($cmd eq 'keygen')        { cmd_keygen(@ARGV) }
+elsif ($cmd eq 'hmac')          { cmd_hmac(@ARGV) }
+elsif ($cmd eq 'totp')          { cmd_totp(@ARGV) }
+elsif ($cmd eq 'encrypt-file')  { cmd_encrypt_file(@ARGV) }
+elsif ($cmd eq 'decrypt-file')  { cmd_decrypt_file(@ARGV) }
+elsif ($cmd eq 'vault-pack')    { cmd_vault_pack(@ARGV) }
+elsif ($cmd eq 'vault-unpack')  { cmd_vault_unpack(@ARGV) }
+else                            { die "Unknown command: $cmd\n"; usage(1) }
+
+exit 0;
+
+# ---------------------------------------------------------------------------
+sub usage {
+    my ($exit) = @_;
+    print STDERR <<'USAGE';
+Usage: cryptokit <command> [args]
+
+Commands:
+  genpw [length]                  Generate a random password (default 20)
+  hash <password>                 Argon2id hash of a password
+  keygen                          Generate an ECC key pair (PEM)
+  hmac <key> <message>            HMAC-SHA256 of a message
+  totp <base32-secret>            Generate a TOTP code
+  encrypt-file <key-hex> <in> <out>
+                                  Encrypt a file with AES-256-GCM
+  decrypt-file <key-hex> <in> <out>
+                                  Decrypt a file with AES-256-GCM
+  vault-pack <key-hex> <in> <out>
+                                  Split a file into encrypted chunks
+                                  and pack them into one container
+  vault-unpack <key-hex> <in> <out>
+                                  Reassemble a packed container
+
+Options:
+  -h, --help                      Show this help
+
+Examples:
+  cryptokit genpw 32
+  cryptokit hash 'hunter2'
+  cryptokit hmac 'shared-key' 'payload'
+  cryptokit totp 'JBSWY3DPEHPK3PXP'
+  cryptokit vault-pack $(perl -MCrypt::PRNG=random_bytes -e 'print unpack("H*", random_bytes(32))') plain.txt secret.ckfv
+USAGE
+    exit $exit;
 }
-elsif ($cmd eq 'hash') {
-    print $kit->hash->create(shift @ARGV), "\n";
+
+# ---------------------------------------------------------------------------
+sub cmd_genpw {
+    my ($len) = @_;
+    $len //= 20;
+    die "Length must be a positive integer\n" unless $len =~ /^\d+$/ && $len > 0;
+    print $kit->password->generate($len), "\n";
 }
-elsif ($cmd eq 'keygen') {
+
+sub cmd_hash {
+    my ($pw) = @_;
+    die "Usage: cryptokit hash <password>\n" unless defined $pw;
+    print $kit->hash->create($pw), "\n";
+}
+
+sub cmd_keygen {
     my $kp = $kit->key->generate;
-    print $kp->{private_pem}, $kp->{public_pem};
+    print $kp->{private_pem};
+    print $kp->{public_pem};
 }
-else {
-    die "unknown command: $cmd\n";
+
+sub cmd_hmac {
+    my ($key, $msg) = @_;
+    die "Usage: cryptokit hmac <key> <message>\n" unless defined $key && defined $msg;
+    print $kit->hmac->create($key, $msg), "\n";
+}
+
+sub cmd_totp {
+    my ($b32) = @_;
+    die "Usage: cryptokit totp <base32-secret>\n" unless defined $b32;
+    require MIME::Base32;
+    my $raw = MIME::Base32::decode_base32($b32);
+    print $kit->totp->generate($raw), "\n";
+}
+
+sub cmd_encrypt_file {
+    my ($key_hex, $in, $out) = @_;
+    die "Usage: cryptokit encrypt-file <key-hex> <in> <out>\n"
+        unless defined $key_hex && defined $in && defined $out;
+    my $key = _hex_key($key_hex);
+    $kit->file_encrypt->encrypt_file($key, $in, $out);
+    print "Encrypted $in -> $out\n";
+}
+
+sub cmd_decrypt_file {
+    my ($key_hex, $in, $out) = @_;
+    die "Usage: cryptokit decrypt-file <key-hex> <in> <out>\n"
+        unless defined $key_hex && defined $in && defined $out;
+    my $key = _hex_key($key_hex);
+    $kit->file_encrypt->decrypt_file($key, $in, $out);
+    print "Decrypted $in -> $out\n";
+}
+
+sub cmd_vault_pack {
+    my ($key_hex, $in, $out) = @_;
+    die "Usage: cryptokit vault-pack <key-hex> <in> <out>\n"
+        unless defined $key_hex && defined $in && defined $out;
+    my $key  = _hex_key($key_hex);
+    my $info = $kit->file_vault->pack($key, $in, $out);
+    printf "Packed %d chunk(s), %d bytes -> %s\n",
+        $info->{n_chunks}, $info->{orig_size}, $out;
+}
+
+sub cmd_vault_unpack {
+    my ($key_hex, $in, $out) = @_;
+    die "Usage: cryptokit vault-unpack <key-hex> <in> <out>\n"
+        unless defined $key_hex && defined $in && defined $out;
+    my $key  = _hex_key($key_hex);
+    my $info = $kit->file_vault->unpack($key, $in, $out);
+    printf "Unpacked %d chunk(s), %d bytes -> %s\n",
+        $info->{n_chunks}, $info->{orig_size}, $out;
+}
+
+sub _hex_key {
+    my ($hex) = @_;
+    die "Key must be 64 hex characters (32 bytes)\n"
+        unless $hex =~ /^[0-9a-fA-F]{64}$/;
+    return pack('H*', $hex);
 }

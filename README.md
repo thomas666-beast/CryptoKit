@@ -1,6 +1,6 @@
 # CryptoKit
 
-A modular cryptographic toolkit for Perl. Provides password hashing, secure random password generation, ECC key management, hybrid encryption, and secure memory handling — each as an independent, lazily loaded submodule.
+A modular cryptographic toolkit for Perl. Provides password hashing, secure random password generation, ECC key management, hybrid encryption, HMAC signing, TOTP, file encryption, split file vaults, and secure memory handling — each as an independent, lazily loaded submodule.
 
 Built on [CryptX](https://metacpan.org/pod/CryptX) and [Crypt::Argon2](https://metacpan.org/pod/Crypt::Argon2), with security-critical version pins.
 
@@ -12,6 +12,10 @@ Built on [CryptX](https://metacpan.org/pod/CryptX) and [Crypt::Argon2](https://m
 | `CryptoKit::Password` | Cryptographically strong random password generation |
 | `CryptoKit::Key` | ECC key generation, ECDSA sign/verify |
 | `CryptoKit::Encrypt` | Hybrid ECDH + HKDF + AES-256-GCM authenticated encryption |
+| `CryptoKit::HMAC` | HMAC signing with constant-time verification |
+| `CryptoKit::TOTP` | Time-based one-time passwords (Google Authenticator compatible) |
+| `CryptoKit::FileEncrypt` | Streaming AES-256-GCM file encryption |
+| `CryptoKit::FileVault` | Split a file into encrypted chunks, pack, and reassemble |
 | `CryptoKit::Secure` | Secure memory buffers and constant-time comparison |
 
 ## Installation
@@ -34,7 +38,7 @@ carton exec -- ./Build test
 ### As a library
 
 ```bash
-cpanm CryptX Crypt::Argon2 Crypt::SecretBuffer
+cpanm CryptX Crypt::Argon2 Crypt::SecretBuffer Authen::OATH MIME::Base32
 ```
 
 Then add the project's `lib/` to your `@INC`, or install with `./Build install`.
@@ -45,6 +49,8 @@ Then add the project's `lib/` to your `@INC`, or install with `./Build install`.
 - **CryptX >= 0.088** — earlier versions do not reseed the PRNG after `fork()`, which can cause child processes to generate identical keys
 - **Crypt::SecretBuffer >= 0.019** — earlier versions have a timing side-channel in `memcmp`
 - `Crypt::Argon2` (any version)
+- `Authen::OATH` (for TOTP)
+- `MIME::Base32` (for the CLI `totp` command)
 - For tests: `Test2::V0`
 
 ## Encryption vs. signing: which key does what
@@ -79,7 +85,6 @@ my $pw = $kit->password->generate(24);
 
 # ECC key pair
 my $kp = $kit->key->generate;
-# $kp->{private_pem}, $kp->{public_pem}
 
 # Sign with PRIVATE key, verify with PUBLIC key
 my $sig   = $kit->key->sign($kp->{private_pem}, 'message');
@@ -88,6 +93,14 @@ my $valid = $kit->key->verify($kp->{public_pem}, $sig, 'message');
 # Encrypt with PUBLIC key, decrypt with PRIVATE key
 my $blob = $kit->encrypt->encrypt($kp->{public_pem}, 'secret text');
 my $text = $kit->encrypt->decrypt($kp->{private_pem}, $blob);
+
+# HMAC for API tokens
+my $token   = $kit->hmac->create($secret_key, 'payload');
+my $hmac_ok = $kit->hmac->verify($secret_key, 'payload', $token);
+
+# TOTP for two-factor auth
+my $code    = $kit->totp->generate($totp_secret);
+my $totp_ok = $kit->totp->verify($totp_secret, $user_code);
 
 # Constant-time comparison
 my $eq = $kit->secure->compare($user_token, $stored_token);
@@ -146,9 +159,7 @@ The `object` field is a live `Crypt::PK::ECC` instance if you need lower-level a
 
 Encryption uses the **recipient's public key** to encrypt, and the **recipient's private key** to decrypt. This is the opposite direction from signing: only the holder of the private key can read the message.
 
-Do not confuse this with `sign`/`verify`, where the private key signs and the public key verifies. Signing proves authenticity but provides no confidentiality — anyone with the public key can verify a signature.
-
-`CryptoKit::Encrypt` implements the standard hybrid pattern, because ECC alone cannot encrypt arbitrary-length data (it is a key-agreement primitive, limited to a few dozen bytes):
+`CryptoKit::Encrypt` implements the standard hybrid pattern, because ECC alone cannot encrypt arbitrary-length data:
 
 1. Generate an ephemeral ECC key pair per message (forward secrecy)
 2. ECDH: ephemeral private key + recipient public key → shared secret
@@ -166,7 +177,94 @@ my $blob = $e->encrypt($kp->{public_pem}, 'secret message');
 my $text = $e->decrypt($kp->{private_pem}, $blob);
 ```
 
-`decrypt` returns `undef` and dies if the ciphertext was tampered with or the wrong private key was used. Authenticated encryption fails closed.
+`decrypt` returns `undef` and dies if the ciphertext was tampered with or the wrong private key was used.
+
+### HMAC signing (`CryptoKit::HMAC`)
+
+HMAC is a keyed hash used for API tokens, webhook signatures, and session cookies. It uses a **shared secret**, not a public/private key pair.
+
+```perl
+my $h = CryptoKit::HMAC->new;
+
+my $token = $h->create($shared_secret, $payload);
+if ($h->verify($shared_secret, $payload, $token)) {
+    # authentic
+}
+
+my $raw = $h->raw($shared_secret, $payload);       # binary
+my $b64 = $h->b64url($shared_secret, $payload);    # URL-safe base64
+```
+
+Default hash is SHA256. `verify` uses constant-time comparison.
+
+### Time-based one-time passwords (`CryptoKit::TOTP`)
+
+TOTP generates 6-digit codes that change every 30 seconds, compatible with Google Authenticator, Authy, and 1Password.
+
+```perl
+my $t = CryptoKit::TOTP->new;
+
+my $code = $t->generate($secret);
+if ($t->verify($secret, $user_code)) {
+    # correct
+}
+```
+
+The `$secret` must be the **decoded** Base32 value, not the Base32 string itself:
+
+```perl
+use MIME::Base32 qw(decode_base32);
+my $raw_secret = decode_base32($base32_from_qr);
+my $code = $t->generate($raw_secret);
+```
+
+`verify` accepts an optional `$window` (default 1), checking the previous, current, and next timestep.
+
+### File encryption (`CryptoKit::FileEncrypt`)
+
+Streaming AES-256-GCM for files that may be larger than memory. Encrypts in 1 MiB chunks.
+
+```perl
+my $f = CryptoKit::FileEncrypt->new;
+
+$f->encrypt_file($key32, 'plain.txt', 'secret.enc');
+$f->decrypt_file($key32, 'secret.enc', 'plain.out');
+```
+
+The key must be **exactly 32 bytes** (AES-256). Generate one with `Crypt::PRNG`:
+
+```perl
+use Crypt::PRNG qw(random_bytes);
+my $key32 = random_bytes(32);
+```
+
+Output format: `[12-byte IV][ciphertext][16-byte tag]`. The IV is random per encryption, so the same plaintext with the same key produces different ciphertext each time.
+
+`decrypt_file` dies if the authentication tag does not match.
+
+**Memory note:** `decrypt_file` currently reads the whole ciphertext into memory to locate the trailing 16-byte tag. For files larger than a few hundred MB, memory usage grows with file size.
+
+### File vault (`CryptoKit::FileVault`)
+
+Splits a file into fixed-size chunks, encrypts each chunk independently with AES-256-GCM, and packs them with an encrypted manifest.
+
+```perl
+my $v = CryptoKit::FileVault->new;
+
+# Container mode: one file
+my $info = $v->pack($key32, 'plain.txt', 'secret.ckfv');
+$v->unpack($key32, 'secret.ckfv', 'plain.out');
+
+# Split mode: one manifest + one file per chunk
+my $info = $v->split($key32, 'plain.txt', 'vault-dir/');
+$v->join($key32, 'vault-dir/plain.txt.ckfv-manifest', 'plain.out');
+```
+
+Each chunk has its own IV and tag, so a corrupted or missing chunk is identified precisely. The manifest records the number of chunks, chunk size, original filename, original size, and SHA-256 of the whole plaintext. The manifest itself is encrypted with the same key, so metadata is confidential.
+
+Split mode is useful for distributing files across storage, or for parallelizing decryption — each chunk can be decrypted independently.
+
+**Memory note:** `pack` and `split` currently load the whole input into memory to compute the plaintext SHA-256. For files larger than available RAM, use `CryptoKit::FileEncrypt` (streaming, no manifest) instead.
 
 ### Secure memory (`CryptoKit::Secure`)
 
@@ -176,12 +274,10 @@ Wraps `Crypt::SecretBuffer` — an opaque buffer that wipes its memory on destru
 my $s = CryptoKit::Secure->new;
 
 my $buf = $s->wrap('sensitive data');
-# $buf is a Crypt::SecretBuffer; wiped when it goes out of scope
-
-my $eq = $s->compare($a, $b);   # constant-time, works with scalars or buffers
+my $eq  = $s->compare($a, $b);
 ```
 
-Never use Perl's `eq` to compare security-sensitive strings (HMACs, tokens) — it short-circuits on the first differing byte, which leaks timing information.
+Never use Perl's `eq` to compare security-sensitive strings — it short-circuits on the first differing byte, which leaks timing information.
 
 ## Command-line interface
 
@@ -198,15 +294,40 @@ carton exec -- ./bin/cryptokit keygen
 | `genpw [length]` | A random password (default 20) |
 | `hash <password>` | Argon2id-encoded hash |
 | `keygen` | ECC private PEM followed by public PEM |
+| `hmac <key> <message>` | HMAC-SHA256 hex of the message |
+| `totp <base32-secret>` | Current 6-digit TOTP code |
+| `encrypt-file <key-hex> <in> <out>` | AES-256-GCM encrypted file |
+| `decrypt-file <key-hex> <in> <out>` | Decrypted file (dies on tag mismatch) |
+| `vault-pack <key-hex> <in> <out>` | Split + encrypt + pack a file into one container |
+| `vault-unpack <key-hex> <in> <out>` | Reassemble a packed container |
+
+Generate a file encryption key as 64 hex characters:
+
+```bash
+perl -MCrypt::PRNG=random_bytes -e 'print unpack("H*", random_bytes(32)), "\n"'
+```
+
+Full round-trip example:
+
+```bash
+KEY=$(perl -MCrypt::PRNG=random_bytes -e 'print unpack("H*", random_bytes(32))')
+echo "secret contents" > plain.txt
+cryptokit vault-pack "$KEY" plain.txt secret.ckfv
+cryptokit vault-unpack "$KEY" secret.ckfv plain.out
+diff plain.txt plain.out && echo "round-trip OK"
+```
 
 ## Security Notes
 
-- **Keep CryptX updated.** Version 0.088 fixed a critical `fork()` PRNG reseeding bug that could cause different worker processes to generate identical keys. Version 0.088_001 fixed a timing side-channel in AEAD tag verification.
-- **Keep encrypt and sign directions straight.** Encrypt with the public key, decrypt with the private key. Sign with the private key, verify with the public key. Mixing them up either breaks confidentiality or breaks authenticity.
+- **Keep CryptX updated.** Version 0.088 fixed a critical `fork()` PRNG reseeding bug. Version 0.088_001 fixed a timing side-channel in AEAD tag verification.
+- **Keep encrypt and sign directions straight.** Encrypt with the public key, decrypt with the private key. Sign with the private key, verify with the public key.
 - **Only store hashed passwords.** `CryptoKit::Hash->create` returns the encoded string; store that, never the plaintext.
-- **Authenticated encryption only.** `CryptoKit::Encrypt` always uses AES-GCM. Do not add unauthenticated modes (AES-CBC, CTR without a MAC) — they are trivially malleable.
-- **Constant-time comparison.** Use `CryptoKit::Secure->compare` for tokens and HMACs, not `eq` or `==`.
-- **Private keys are sensitive.** `CryptoKit::Key` returns PEM strings in plain scalars. For production, pass them through `CryptoKit::Secure->wrap` before further use, and protect key files with mode `0600`.
+- **Authenticated encryption only.** `CryptoKit::Encrypt`, `CryptoKit::FileEncrypt`, and `CryptoKit::FileVault` always use AES-GCM. Do not add unauthenticated modes.
+- **Constant-time comparison.** Use `CryptoKit::Secure->compare` or `CryptoKit::HMAC->verify` for tokens and HMACs, not `eq` or `==`.
+- **TOTP secrets are sensitive.** A leaked TOTP secret lets an attacker generate valid codes forever. Store it encrypted at rest, and rotate it if compromised.
+- **HMAC keys are shared secrets.** Anyone with the key can forge tokens. Distribute over a secure channel and rotate periodically.
+- **File encryption keys are raw 32-byte values.** Store them separately from the encrypted files, and never in the same directory.
+- **Private keys are sensitive.** `CryptoKit::Key` returns PEM strings in plain scalars. Pass them through `CryptoKit::Secure->wrap` before further use, and protect key files with mode `0600`.
 
 ## Project layout
 
@@ -226,6 +347,10 @@ CryptoKit/
 │       ├── Password.pm
 │       ├── Key.pm
 │       ├── Encrypt.pm
+│       ├── HMAC.pm
+│       ├── TOTP.pm
+│       ├── FileEncrypt.pm
+│       ├── FileVault.pm
 │       └── Secure.pm
 └── t/
     ├── 00-load.t
@@ -233,6 +358,10 @@ CryptoKit/
     ├── password.t
     ├── key.t
     ├── encrypt.t
+    ├── hmac.t
+    ├── totp.t
+    ├── fileencrypt.t
+    ├── filevault.t
     └── secure.t
 ```
 
@@ -259,10 +388,8 @@ The main module never needs to know your implementation details; each submodule 
 
 ### Planned additions
 
-- `CryptoKit::HMAC` — HMAC signing for API tokens and webhook verification
-- `CryptoKit::TOTP` — time-based one-time passwords (Google Authenticator compatible)
-- File encryption — streaming AES-GCM for large files
 - `SecretBuffer` integration inside `Hash` and `Key` so passwords and private keys never linger in plain scalars
+- Streaming `pack` and `split` in `FileVault` to avoid loading the whole file into memory
 
 ## Testing
 
