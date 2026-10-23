@@ -4,11 +4,14 @@ use warnings;
 our $VERSION = '0.01';
 
 my %MODULES = (
-    hash     => 'CryptoKit::Hash',
-    password => 'CryptoKit::Password',
-    key      => 'CryptoKit::Key',
-    encrypt  => 'CryptoKit::Encrypt',
-    secure   => 'CryptoKit::Secure',
+    hash         => 'CryptoKit::Hash',
+    password     => 'CryptoKit::Password',
+    key          => 'CryptoKit::Key',
+    encrypt      => 'CryptoKit::Encrypt',
+    secure       => 'CryptoKit::Secure',
+    hmac         => 'CryptoKit::HMAC',
+    totp         => 'CryptoKit::TOTP',
+    file_encrypt => 'CryptoKit::FileEncrypt',
 );
 
 sub new { bless {}, shift }
@@ -28,6 +31,9 @@ sub password { $_[0]->module('password')->new(@_[1..$#_]) }
 sub key      { $_[0]->module('key')->new(@_[1..$#_]) }
 sub encrypt  { $_[0]->module('encrypt')->new(@_[1..$#_]) }
 sub secure   { $_[0]->module('secure')->new(@_[1..$#_]) }
+sub hmac         { $_[0]->module('hmac')->new(@_[1..$#_]) }
+sub totp         { $_[0]->module('totp')->new(@_[1..$#_]) }
+sub file_encrypt { $_[0]->module('file_encrypt')->new(@_[1..$#_]) }
 
 1;
 
